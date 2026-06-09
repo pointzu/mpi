@@ -469,6 +469,67 @@ SIMD 设置 & 上二对角/ms & GKH/ms & 总时间/ms & 总时间标准差/ms\\
 
 这一结果可以解释 SIMD 实验中的现象：VTune 的热点表中确实出现了 \texttt{\_mm\_add\_pd}、\texttt{\_mm\_loadu\_pd}、\texttt{simd\_dot} 等 SIMD 相关项，说明向量化代码被执行；但是在 MPI+GKH 场景中，活动块划分、清理、矩阵同步和任务等待共同参与耗时，所以 SIMD 指令热点并不能直接转化为 GKH 阶段的线性加速。也就是说，子进程内部仍有计算热点可优化，但服务器规模扩展曲线的主要限制已经上升到活动块并行度和 MPI 通信层面。
 
+\section{进阶要求探索}
+
+\subsection{不同平台与并行形态对比}
+本实验主要运行平台是课程服务器，编译环境显示 MPI 头文件来自 \texttt{mpich-aarch64}，因此服务器数据可视为 ARM 平台上的 MPI+SIMD 实验。作为对照，本地 Windows x86 环境中保留了 serial、pthread 与 VTune profiling 数据。两类平台的 CPU、编译器、系统负载和矩阵规模并不完全一致，所以本文不把它们的绝对耗时直接横向比较，而只比较“同一平台、同一输入内部”的加速趋势。
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{llllr}
+\toprule
+平台 & 并行形态 & 代表样例 & GKH 耗时/ms & 相对结论\\
+\midrule
+x86 本地 & serial+SIMD & 随机 $512\times512$ & 4421.59 & 基准\\
+x86 本地 & pthread4+SIMD & 随机 $512\times512$ & 4402.29 & 约 1.00 倍\\
+x86 本地 & serial+SIMD & 4 个 $128$ 块 & 1130.35 & 基准\\
+x86 本地 & pthread4+SIMD & 4 个 $128$ 块 & 360.63 & 约 3.13 倍\\
+ARM 服务器 & MPI+SIMD, $np=1$ & 随机 $1000\times1000$ & 23147.60 & 基准\\
+ARM 服务器 & MPI+SIMD, $np=4$ & 随机 $1000\times1000$ & 15975.63 & 约 1.45 倍\\
+ARM 服务器 & MPI+SIMD, $np=32$ & 随机 $1000\times1000$ & 67490.93 & 约 0.34 倍\\
+\bottomrule
+\end{tabular}
+\caption{不同平台和并行形态的趋势对比}
+\label{tab:advanced-platform}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/advanced_parallel_comparison.png}
+\caption{不同平台与并行形态的相对加速趋势}
+\label{fig:advanced-platform}
+\end{figure}
+
+表\ref{tab:advanced-platform} 和图\ref{fig:advanced-platform} 的关键结论是：平台差异不是唯一决定因素，活动块并行度更直接决定了并行收益。本地 x86 上，随机矩阵的 pthread4 几乎不能加速 GKH；但在人工构造的 4 个独立活动块样例中，pthread4 可以达到约 3.13 倍加速。ARM 服务器上也呈现类似趋势：当 $np=4$ 仍能承接一定活动块时，MPI+SIMD 有有限收益；当 $np=32$ 远大于可同时处理的活动块数量时，通信和等待开销超过计算收益，性能显著退化。
+
+这组进阶对比说明，多线程、SIMD 和 MPI 的关系不是简单叠加。SIMD 改善单个 rank 或线程内部的向量运算，多线程和 MPI 需要足够多的独立任务才能发挥作用。若算法长期只有一个大活动块，换成更多线程、更多进程或更强平台都难以自动获得线性加速。
+
+\subsection{不同 MPI 编程方法的比较}
+本次最终代码采用阻塞双边通信：根进程通过 \texttt{MPI\_Bcast} 同步矩阵状态，通过 \texttt{MPI\_Send}/\texttt{MPI\_Recv} 下发任务和回收结果，并使用 \texttt{MPI\_ANY\_SOURCE} 实现动态任务领取。选择该方案的原因是它最容易保证 GKH 每轮矩阵状态一致，也便于定位正确性问题。表\ref{tab:mpi-methods} 总结了可选 MPI 编程方法在本 SVD-GKH 场景中的适用性。
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{p{0.18\textwidth}p{0.24\textwidth}p{0.25\textwidth}p{0.23\textwidth}}
+\toprule
+方法 & 适用点 & 可能收益 & 主要风险\\
+\midrule
+阻塞双边通信 & 已在最终代码中实现，任务和结果顺序清晰 & 正确性最稳定，便于统计广播与回传开销 & 根进程等待明显，通信与计算重叠少\\
+非阻塞双边通信 & 可将 \texttt{MPI\_Isend}/\texttt{MPI\_Irecv} 用于任务下发和结果回收 & 当 ready task 很多时，有机会隐藏部分结果回传延迟 & GKH 下一轮依赖合并后的矩阵状态，普通随机矩阵中可重叠空间有限\\
+单边通信 RMA & 可尝试用 \texttt{MPI\_Win} 暴露活动块缓冲区，由 worker 主动读写 & 理论上减少根进程参与频率，适合固定缓冲区反复复用 & 一致性、锁和窗口同步复杂；$U,V$ 列更新不连续，容易引入合并错误\\
+MPI 自身多线程支持 & 可用 \texttt{MPI\_Init\_thread} 组成 MPI+pthread 混合模型 & 一节点一个或少量 rank，rank 内用线程，可减少跨进程矩阵复制 & \texttt{MPI\_THREAD\_MULTIPLE} 可能带来额外锁开销；需要严格限定通信线程\\
+\bottomrule
+\end{tabular}
+\caption{不同 MPI 编程方法在 SVD-GKH 中的适用性分析}
+\label{tab:mpi-methods}
+\end{table}
+
+从当前 41 组服务器数据看，最值得继续尝试的不是盲目引入更复杂的通信模型，而是混合并行：节点间使用较少 MPI rank，节点内复用已有 pthread/OpenMP 活动块任务池。这样可以减少同一节点内多个进程重复持有完整 $U,B,V$ 的内存副本，也可以避免过多 rank 同时参与广播。非阻塞通信和单边通信更适合作为后续优化分支，在验证数据一致性和收益后再合并到最终代码。
+
+\subsection{其他算法优化策略}
+除通信方式外，本实验还可以从算法层面继续优化。第一，设置任务粒度阈值：当活动块数量少或块太小时，直接在根进程串行推进，避免广播完整矩阵。当前实现已经包含“只有一个非平凡块时串行推进”的思想，后续可把阈值从数量扩展到估算工作量。第二，减少同步数据量：不要每轮广播完整 $U,B,V$，而是只同步与活动块相关的 $B$ 子块和 $U,V$ 列区间；这一策略能够直接降低表\ref{tab:mpi-methods} 中阻塞通信的主要开销。第三，延迟更新正交矩阵：先记录 Givens 旋转序列，待若干轮后批量更新 $U,V$，可能提升缓存局部性和 SIMD 覆盖率，但需要额外验证重构误差和数值稳定性。第四，构造并识别块结构输入：本地 x86 的 4 块样例说明，只要活动块数量充足，已有任务池就能取得明显收益；因此对具有块结构或近似块对角结构的矩阵，MPI 任务池更可能发挥作用。
+
 \section{综合讨论}
 
 \subsection{为什么 $np=4$ 最优}
@@ -489,6 +550,8 @@ SIMD 优化仍然是必要的基础优化。它对上二对角化阶段有稳定
 
 从 41 组真实服务器数据看，程序正确性稳定，全部测试通过，误差保持在 $10^{-13}$ 量级。性能方面，GKH 阶段在 $np=4$ 时取得最好平均结果，加速比为 1.45；$np=8$ 后收益下降，$np=32$ 出现明显负优化。编译优化对性能影响显著，\texttt{-O2} 相比 \texttt{-O0} 端到端加速 4.82 倍；SIMD 对上二对角化有 1.26 倍收益，但对 MPI-GKH 基本无提升。综合来看，SVD 的 MPI 加速受活动块并行度强烈限制，任务池实现是必要的，但通信和算法粒度决定了其上限。
 
+进阶探索部分进一步对比了 ARM 服务器 MPI+SIMD 与本地 x86 pthread+SIMD 的趋势。结果表明，随机矩阵在多线程和多进程下都只能获得有限收益，而人工块结构样例可以让 pthread4 达到约 3.13 倍 GKH 加速。这说明后续优化的重点应放在减少通信复制、提高活动块并行度以及发展 MPI+线程的混合并行，而不是单纯增加进程数。
+
 \newpage
 \section*{附录 A：数据与图表文件}
 \addcontentsline{toc}{section}{附录 A：数据与图表文件}
@@ -496,10 +559,44 @@ SIMD 优化仍然是必要的基础优化。它对上二对角化阶段有稳定
 \begin{itemize}
   \item 原始服务器输出：\texttt{data/results/raw/**/test.o} 与 \texttt{test.e}。
   \item 汇总数据：\texttt{data/results/summary.csv}。
-  \item 图表目录：\texttt{666/figures/}，包含规模扩展、加速比、时间构成、热力图、编译优化、SIMD 对比、重复运行波动图和 VTune 热点图。
+  \item 图表目录：\texttt{666/figures/}，包含规模扩展、加速比、时间构成、热力图、编译优化、SIMD 对比、重复运行波动图、VTune 热点图、进阶并行对比图和 AI 对话截图。
   \item 本地 profiling 输出：\texttt{666/profiling/vtune\_summary.txt} 与 \texttt{666/profiling/vtune\_hotspots.txt}。
   \item 独立操作指南：\texttt{666/操作指南\_MPI\_SVD.md}。
 \end{itemize}
+
+\newpage
+\section*{附录 B：生成式 AI 辅助学习对话记录}
+\addcontentsline{toc}{section}{附录 B：生成式 AI 辅助学习对话记录}
+
+本附录记录了实验过程中利用生成式 AI 辅助理解 SIMD、多线程和 MPI 编程的对话截图。提问方式遵循“先给出自己的实现、实验数据或瓶颈判断，再请求 AI 检查和分析”的原则，避免直接要求 AI 代写完整代码或编造实验结论。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth,height=0.78\textheight,keepaspectratio]{figures/ai_dialog_q1.png}
+\caption{AI 辅助学习对话记录 1}
+\label{fig:ai-dialog-q1}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth,height=0.78\textheight,keepaspectratio]{figures/ai_dialog_q2.png}
+\caption{AI 辅助学习对话记录 2}
+\label{fig:ai-dialog-q2}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth,height=0.78\textheight,keepaspectratio]{figures/ai_dialog_q3.png}
+\caption{AI 辅助学习对话记录 3}
+\label{fig:ai-dialog-q3}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth,height=0.78\textheight,keepaspectratio]{figures/ai_dialog_q4.png}
+\caption{AI 辅助学习对话记录 4}
+\label{fig:ai-dialog-q4}
+\end{figure}
 
 \newpage
 \bibliographystyle{plain}

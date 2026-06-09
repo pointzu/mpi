@@ -24,6 +24,7 @@ profiling/*
 results_local/
 files/
 pdf_reference_excerpt.txt
+.matplotlib/
 AI_提问建议_MPI_SVD.md
 analysis_summary.md
 操作指南_MPI_SVD.md
