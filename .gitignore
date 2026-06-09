@@ -1,0 +1,38 @@
+# Build outputs and local binaries
+main
+main.exe
+main_*.exe
+*.exe
+*.o
+*.e
+*.data
+*.old
+
+# LaTeX intermediates
+*.aux
+*.bbl
+*.blg
+*.log
+*.out
+*.toc
+*.synctex*
+
+# Local profiling and temporary outputs
+profiling/*
+!profiling/
+!profiling/*.txt
+results_local/
+files/
+pdf_reference_excerpt.txt
+
+# Older generated report variants
+report_profiled.*
+report_final.*
+report_含profiling补充版.pdf
+report_最终版_无服务器perf.pdf
+
+# Local-only helper not required on server
+experiment_driver.cpp
+
+# Generated assembly from local inspection
+*.s
