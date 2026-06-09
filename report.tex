@@ -503,6 +503,21 @@ ARM 服务器 & MPI+SIMD, $np=32$ & 随机 $1000\times1000$ & 67490.93 & 0.34 & 
 \label{fig:advanced-platform}
 \end{figure}
 
+本地补充实测在 Windows x86\_64 环境中完成，编译器为 MinGW-W64 \texttt{g++ 7.3.0}。这组实验不用于和 ARM 服务器做绝对耗时排名，而是固定同一平台、同一输入，比较 serial、pthread4 与 OpenMP4 在活动块并行度不同的情况下能否加速。OpenMP4 版本的编译与运行命令如下，随机种子固定为 20260408：
+
+\begin{lstlisting}[language=bash]
+g++ -std=c++17 -O2 -fopenmp experiment_driver.cpp \
+    bidiagonalization.cpp gkh.cpp \
+    -o profiling/experiment_openmp.exe
+
+$env:SVD_MODE='openmp'
+$env:SVD_THREADS='4'
+.\profiling\experiment_openmp.exe --seed 20260408 --repeat 1 \
+    --sizes 512x512 --gkh-blocks 128x4
+\end{lstlisting}
+
+实测输出中两个样例均为 \texttt{PASS}。随机 $512\times512$ 的相对重构误差为 $3.7935\times10^{-13}$，OpenMP4 的 GKH 时间为 4385.86 ms；4 个 $128$ 块结构样例的相对重构误差为 $3.8720\times10^{-13}$，OpenMP4 的 GKH 时间为 359.08 ms。与同一输入下的 serial 和 pthread4 数据放在一起可以看到：随机矩阵中 OpenMP4 只比 serial 快约 1.01 倍，而块结构中 OpenMP4 可达到 3.15 倍。这说明本地实测的核心变量不是“线程 API 名称”，而是活动块是否真的提供了足够的并行任务。
+
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.86\textwidth]{figures/parallel_opportunity_evidence.png}
@@ -582,21 +597,8 @@ SIMD 优化仍然是必要的基础优化。它对上二对角化阶段有稳定
 
 
 \newpage
-\section*{附录 A：数据与图表文件}
-\addcontentsline{toc}{section}{附录 A：数据与图表文件}
-
-\begin{itemize}
-  \item 原始服务器输出：\texttt{data/results/raw/**/test.o} 与 \texttt{test.e}。
-  \item 汇总数据：\texttt{data/results/summary.csv}。
-  \item 本地 x86 对比数据：\texttt{666/results\_local/summary.csv}、\texttt{summary\_avg.csv} 和 \texttt{openmp4\_O2\_512.txt}。
-  \item 图表目录：\texttt{666/figures/}，包含规模扩展、加速比、时间构成、热力图、编译优化、SIMD 对比、重复运行波动图、VTune 热点图、进阶并行对比图、并行机会图和 AI 对话截图。
-  \item 本地 profiling 输出：\texttt{666/profiling/vtune\_summary.txt} 与 \texttt{666/profiling/vtune\_hotspots.txt}。
-  \item 进阶要求数据摘要：\texttt{666/profiling/advanced\_parallel\_evidence.txt}。
-\end{itemize}
-
-\newpage
-\section*{附录 B：生成式 AI 辅助学习对话记录}
-\addcontentsline{toc}{section}{附录 B：生成式 AI 辅助学习对话记录}
+\section*{附录 A：生成式 AI 辅助学习对话记录}
+\addcontentsline{toc}{section}{附录 A：生成式 AI 辅助学习对话记录}
 
 本附录记录了实验过程中利用生成式 AI 辅助理解 SIMD、多线程和 MPI 编程的对话截图。提问方式遵循“先给出自己的实现、实验数据或瓶颈判断，再请求 AI 检查和分析”的原则，避免直接要求 AI 代写完整代码或编造实验结论。
 
