@@ -32,6 +32,7 @@ analysis_summary.md
 # Older generated report variants
 report_profiled.*
 report_final.*
+report_rebuild.*
 report_含profiling补充版.pdf
 report_最终版_无服务器perf.pdf
 
