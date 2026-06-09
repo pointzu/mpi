@@ -1,0 +1,28 @@
+Advanced requirement evidence summary
+
+[ARM server blocking MPI+SIMD scaling]
+np=1: avg_gkh_ms=23147.60, speedup=1.000, std=7535.93
+np=2: avg_gkh_ms=22535.20, speedup=1.027, std=6181.24
+np=4: avg_gkh_ms=15975.63, speedup=1.449, std=4505.90
+np=8: avg_gkh_ms=17322.33, speedup=1.336, std=6851.90
+np=16: avg_gkh_ms=19177.90, speedup=1.207, std=5249.18
+np=32: avg_gkh_ms=67490.93, speedup=0.343, std=36518.19
+
+[x86 local thread/SIMD comparison, same input within platform]
+random512 serial=4421.5912 ms, pthread4=4402.2855 ms, openmp4=4385.8572 ms
+block4x128 serial=1130.3485 ms, pthread4=360.6255 ms, openmp4=359.0844 ms
+random512 speedup pthread=1.004, openmp=1.008
+block4x128 speedup pthread=3.134, openmp=3.148
+
+[Parallel opportunity and imbalance]
+random512 parallel_ready_rounds=8/749 (1.07%), max_ready_tasks=2, worker_imbalance=2225256.94:1
+block4x128 parallel_ready_rounds=252/253 (99.60%), max_ready_tasks=5, worker_imbalance=1.08:1
+
+[MPI communication volume estimate for 1000x1000 U/B/V full broadcast]
+one U+B+V payload = 24.00 MB; current blocking MPI broadcasts this payload to world_size-1 workers per distribute round
+np=1: estimated matrix broadcast traffic per distribute round = 0.00 MB
+np=2: estimated matrix broadcast traffic per distribute round = 24.00 MB
+np=4: estimated matrix broadcast traffic per distribute round = 72.00 MB
+np=8: estimated matrix broadcast traffic per distribute round = 168.00 MB
+np=16: estimated matrix broadcast traffic per distribute round = 360.00 MB
+np=32: estimated matrix broadcast traffic per distribute round = 744.00 MB

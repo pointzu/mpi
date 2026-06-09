@@ -476,21 +476,23 @@ SIMD 设置 & 上二对角/ms & GKH/ms & 总时间/ms & 总时间标准差/ms\\
 
 \begin{table}[H]
 \centering
-\small
-\begin{tabular}{llllr}
+\scriptsize
+\begin{tabular}{llp{0.25\textwidth}rrr}
 \toprule
-平台 & 并行形态 & 代表样例 & GKH 耗时/ms & 相对结论\\
+平台 & 并行形态 & 代表样例 & GKH/ms & 加速比 & 可并行轮次\\
 \midrule
-x86 本地 & serial+SIMD & 随机 $512\times512$ & 4421.59 & 基准\\
-x86 本地 & pthread4+SIMD & 随机 $512\times512$ & 4402.29 & 约 1.00 倍\\
-x86 本地 & serial+SIMD & 4 个 $128$ 块 & 1130.35 & 基准\\
-x86 本地 & pthread4+SIMD & 4 个 $128$ 块 & 360.63 & 约 3.13 倍\\
-ARM 服务器 & MPI+SIMD, $np=1$ & 随机 $1000\times1000$ & 23147.60 & 基准\\
-ARM 服务器 & MPI+SIMD, $np=4$ & 随机 $1000\times1000$ & 15975.63 & 约 1.45 倍\\
-ARM 服务器 & MPI+SIMD, $np=32$ & 随机 $1000\times1000$ & 67490.93 & 约 0.34 倍\\
+x86 本地 & serial+SIMD & 随机 $512\times512$ & 4421.59 & 1.00 & --\\
+x86 本地 & pthread4+SIMD & 随机 $512\times512$ & 4402.29 & 1.00 & $8/749$\\
+x86 本地 & OpenMP4+SIMD & 随机 $512\times512$ & 4385.86 & 1.01 & $8/749$\\
+x86 本地 & serial+SIMD & 4 个 $128$ 块 & 1130.35 & 1.00 & --\\
+x86 本地 & pthread4+SIMD & 4 个 $128$ 块 & 360.63 & 3.13 & $252/253$\\
+x86 本地 & OpenMP4+SIMD & 4 个 $128$ 块 & 359.08 & 3.15 & $252/253$\\
+ARM 服务器 & MPI+SIMD, $np=1$ & 随机 $1000\times1000$ & 23147.60 & 1.00 & 未输出\\
+ARM 服务器 & MPI+SIMD, $np=4$ & 随机 $1000\times1000$ & 15975.63 & 1.45 & 未输出\\
+ARM 服务器 & MPI+SIMD, $np=32$ & 随机 $1000\times1000$ & 67490.93 & 0.34 & 未输出\\
 \bottomrule
 \end{tabular}
-\caption{不同平台和并行形态的趋势对比}
+\caption{不同平台和并行形态的实测数据对比}
 \label{tab:advanced-platform}
 \end{table}
 
@@ -501,7 +503,14 @@ ARM 服务器 & MPI+SIMD, $np=32$ & 随机 $1000\times1000$ & 67490.93 & 约 0.3
 \label{fig:advanced-platform}
 \end{figure}
 
-表\ref{tab:advanced-platform} 和图\ref{fig:advanced-platform} 的关键结论是：平台差异不是唯一决定因素，活动块并行度更直接决定了并行收益。本地 x86 上，随机矩阵的 pthread4 几乎不能加速 GKH；但在人工构造的 4 个独立活动块样例中，pthread4 可以达到约 3.13 倍加速。ARM 服务器上也呈现类似趋势：当 $np=4$ 仍能承接一定活动块时，MPI+SIMD 有有限收益；当 $np=32$ 远大于可同时处理的活动块数量时，通信和等待开销超过计算收益，性能显著退化。
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.86\textwidth]{figures/parallel_opportunity_evidence.png}
+\caption{活动块并行机会与工作量不均衡}
+\label{fig:parallel-opportunity}
+\end{figure}
+
+表\ref{tab:advanced-platform}、图\ref{fig:advanced-platform} 和图\ref{fig:parallel-opportunity} 的关键结论是：平台差异不是唯一决定因素，活动块并行度更直接决定了并行收益。本地 x86 上，随机 $512\times512$ 的可并行轮次只有 $8/749$，pthread4 和 OpenMP4 的 GKH 加速比分别只有 1.00 和 1.01；同时 active worker 的最大/最小工作量比例约为 $2.23\times10^6:1$，说明几乎所有实质工作仍集中在一个 worker 上。相反，4 个 $128$ 块样例中可并行轮次为 $252/253$，最大/最小工作量比例仅约 $1.08:1$，pthread4 和 OpenMP4 分别达到 3.13 和 3.15 倍加速。ARM 服务器上也呈现类似趋势：当 $np=4$ 仍能承接一定活动块时，MPI+SIMD 有有限收益；当 $np=32$ 远大于可同时处理的活动块数量时，通信和等待开销超过计算收益，性能显著退化。
 
 这组进阶对比说明，多线程、SIMD 和 MPI 的关系不是简单叠加。SIMD 改善单个 rank 或线程内部的向量运算，多线程和 MPI 需要足够多的独立任务才能发挥作用。若算法长期只有一个大活动块，换成更多线程、更多进程或更强平台都难以自动获得线性加速。
 
@@ -525,7 +534,26 @@ MPI 自身多线程支持 & 可用 \texttt{MPI\_Init\_thread} 组成 MPI+pthread
 \label{tab:mpi-methods}
 \end{table}
 
-从当前 41 组服务器数据看，最值得继续尝试的不是盲目引入更复杂的通信模型，而是混合并行：节点间使用较少 MPI rank，节点内复用已有 pthread/OpenMP 活动块任务池。这样可以减少同一节点内多个进程重复持有完整 $U,B,V$ 的内存副本，也可以避免过多 rank 同时参与广播。非阻塞通信和单边通信更适合作为后续优化分支，在验证数据一致性和收益后再合并到最终代码。
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{rrrr}
+\toprule
+$np$ & 每轮完整 $U+B+V$ 广播量/MB & GKH 平均耗时/ms & GKH 加速比\\
+\midrule
+1 & 0 & 23147.60 & 1.00\\
+2 & 24 & 22535.20 & 1.03\\
+4 & 72 & 15975.63 & 1.45\\
+8 & 168 & 17322.33 & 1.34\\
+16 & 360 & 19177.90 & 1.21\\
+32 & 744 & 67490.93 & 0.34\\
+\bottomrule
+\end{tabular}
+\caption{阻塞 MPI 方案的通信量估算与实测性能}
+\label{tab:mpi-comm-evidence}
+\end{table}
+
+从当前 41 组服务器数据和表\ref{tab:mpi-comm-evidence} 看，最值得继续尝试的不是盲目引入更复杂的通信模型，而是混合并行：节点间使用较少 MPI rank，节点内复用已有 pthread/OpenMP 活动块任务池。对 $1000\times1000$ 主样例，$U,B,V$ 三个矩阵合计约 24 MB；当前阻塞方案每次进入分发轮次都要向 $world\_size-1$ 个 worker 广播完整矩阵，因此 $np=32$ 时单轮广播量估计达到 744 MB。非阻塞通信可以隐藏一部分发送/接收等待，但不能减少这部分数据量；单边通信也仍需处理同样的矩阵一致性问题。结合图\ref{fig:parallel-opportunity} 中随机矩阵只有 1.07\% 的可并行轮次，非阻塞和单边通信在普通随机矩阵上能重叠的计算窗口很小，更适合作为有块结构输入或混合并行方案上的后续优化分支。
 
 \subsection{其他算法优化策略}
 除通信方式外，本实验还可以从算法层面继续优化。第一，设置任务粒度阈值：当活动块数量少或块太小时，直接在根进程串行推进，避免广播完整矩阵。当前实现已经包含“只有一个非平凡块时串行推进”的思想，后续可把阈值从数量扩展到估算工作量。第二，减少同步数据量：不要每轮广播完整 $U,B,V$，而是只同步与活动块相关的 $B$ 子块和 $U,V$ 列区间；这一策略能够直接降低表\ref{tab:mpi-methods} 中阻塞通信的主要开销。第三，延迟更新正交矩阵：先记录 Givens 旋转序列，待若干轮后批量更新 $U,V$，可能提升缓存局部性和 SIMD 覆盖率，但需要额外验证重构误差和数值稳定性。第四，构造并识别块结构输入：本地 x86 的 4 块样例说明，只要活动块数量充足，已有任务池就能取得明显收益；因此对具有块结构或近似块对角结构的矩阵，MPI 任务池更可能发挥作用。
@@ -550,7 +578,8 @@ SIMD 优化仍然是必要的基础优化。它对上二对角化阶段有稳定
 
 从 41 组真实服务器数据看，程序正确性稳定，全部测试通过，误差保持在 $10^{-13}$ 量级。性能方面，GKH 阶段在 $np=4$ 时取得最好平均结果，加速比为 1.45；$np=8$ 后收益下降，$np=32$ 出现明显负优化。编译优化对性能影响显著，\texttt{-O2} 相比 \texttt{-O0} 端到端加速 4.82 倍；SIMD 对上二对角化有 1.26 倍收益，但对 MPI-GKH 基本无提升。综合来看，SVD 的 MPI 加速受活动块并行度强烈限制，任务池实现是必要的，但通信和算法粒度决定了其上限。
 
-进阶探索部分进一步对比了 ARM 服务器 MPI+SIMD 与本地 x86 pthread+SIMD 的趋势。结果表明，随机矩阵在多线程和多进程下都只能获得有限收益，而人工块结构样例可以让 pthread4 达到约 3.13 倍 GKH 加速。这说明后续优化的重点应放在减少通信复制、提高活动块并行度以及发展 MPI+线程的混合并行，而不是单纯增加进程数。
+进阶探索部分进一步对比了 ARM 服务器 MPI+SIMD 与本地 x86 pthread/OpenMP+SIMD 的趋势。结果表明，随机矩阵的可并行轮次只有 $8/749$，pthread4 和 OpenMP4 都只能获得约 1.0 倍 GKH 加速；人工块结构样例的可并行轮次达到 $252/253$，pthread4 与 OpenMP4 分别达到 3.13 和 3.15 倍 GKH 加速。MPI 通信量估算也显示，$np=32$ 时完整 $U+B+V$ 广播量每轮可达约 744 MB。这说明后续优化的重点应放在减少通信复制、提高活动块并行度以及发展 MPI+线程的混合并行，而不是单纯增加进程数。
+
 
 \newpage
 \section*{附录 A：数据与图表文件}
@@ -559,9 +588,10 @@ SIMD 优化仍然是必要的基础优化。它对上二对角化阶段有稳定
 \begin{itemize}
   \item 原始服务器输出：\texttt{data/results/raw/**/test.o} 与 \texttt{test.e}。
   \item 汇总数据：\texttt{data/results/summary.csv}。
-  \item 图表目录：\texttt{666/figures/}，包含规模扩展、加速比、时间构成、热力图、编译优化、SIMD 对比、重复运行波动图、VTune 热点图、进阶并行对比图和 AI 对话截图。
+  \item 本地 x86 对比数据：\texttt{666/results\_local/summary.csv}、\texttt{summary\_avg.csv} 和 \texttt{openmp4\_O2\_512.txt}。
+  \item 图表目录：\texttt{666/figures/}，包含规模扩展、加速比、时间构成、热力图、编译优化、SIMD 对比、重复运行波动图、VTune 热点图、进阶并行对比图、并行机会图和 AI 对话截图。
   \item 本地 profiling 输出：\texttt{666/profiling/vtune\_summary.txt} 与 \texttt{666/profiling/vtune\_hotspots.txt}。
-  \item 独立操作指南：\texttt{666/操作指南\_MPI\_SVD.md}。
+  \item 进阶要求数据摘要：\texttt{666/profiling/advanced\_parallel\_evidence.txt}。
 \end{itemize}
 
 \newpage
